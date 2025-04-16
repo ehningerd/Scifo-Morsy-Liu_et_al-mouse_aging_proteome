@@ -1,0 +1,266 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install(c("ggplot2",
+                       "stringr",
+                       "NormalyzerDE",
+                       "corrplot",
+                       "Biostrings",
+                       "impute",
+                       "dplyr",
+                       "tibble",
+                       "org.Hs.eg.db",
+                       "clusterProfiler",
+                       "enrichplot",
+                       "limma",
+                       "ComplexHeatmap",
+                       "circlize",
+                       "missForest",
+                       "Mfuzz"))
+```
+
+
+```{r}
+library(tidyverse)
+library(limma)
+library(plotly)
+library(missForest)
+library(ggplot2)
+library(stringr)
+library(dplyr)
+library(tibble)
+library(reshape2)
+library(ComplexHeatmap)
+library(circlize)
+library(stats)
+library(Mfuzz)
+```
+
+```{r}
+load("/EMBOJ-2025-120525_SourceDataForFigure2_3_Organ.RData")
+```
+
+Moderated-F Test
+
+```{r}
+expression_matrix_lrt_2 <- assay(sn_qf_custom_robust_filtered, "MissForest_imputed_proteinRobust_all_proteins")
+
+full_design_lrt_2 <- model.matrix(~ condition, data = colData(sn_qf_custom_robust_filtered))
+
+fit_full_lrt_2 <- lmFit(expression_matrix_lrt_2, full_design_lrt_2)
+
+fit_full_lrt_2 <- eBayes(fit_full_lrt_2)
+
+lrt_results_2 <- topTable(fit_full_lrt_2, coef = NULL, number = Inf, sort.by = "F")
+
+head(lrt_results_2)
+
+sigs = lrt_results_2[lrt_results_2$adj.P.Val < 0.05, ]
+
+nrow(lrt_results_2[lrt_results_2$adj.P.Val < 0.05, ])
+
+num_na_adj_pvals <- sum(is.na(sigs$adj.P.Val))
+
+cat("Number of significant proteins with NA in adjusted p-values:", num_na_adj_pvals, "\n")
+
+significant_proteins <- sigs[!is.na(sigs$adj.P.Val), ]
+
+cat("Number of significant proteins after filtering out NAs:", nrow(significant_proteins), "\n")
+
+head(significant_proteins)
+
+#write.csv(significant_proteins, "Kidneys_DEPs.csv", row.names = TRUE)
+```
+
+filtering the data for the significant protein expressions
+```{r}
+
+significant_protein_ids <- rownames(significant_proteins)
+
+matching_ids <- intersect(rownames(expression_matrix_lrt_2), significant_protein_ids)
+
+missing_ids <- setdiff(significant_protein_ids, rownames(expression_matrix_lrt_2))
+if (length(missing_ids) > 0) {
+  warning("Some significant proteins were not found in the expression matrix and will be excluded.")
+}
+
+expression_data_significant <- expression_matrix_lrt_2[matching_ids, ]
+expression_data_long <- melt(expression_data_significant)
+
+expression_data_long$condition <- rep(colData(sn_qf_custom_robust_filtered)$condition, each = nrow(expression_data_significant))
+```
+
+Visualization -> Heatmaps/PCA - Mfuzz clustering
+
+
+```{r}
+metadata <- as.data.frame(colData(sn_qf_custom_robust_filtered))
+metadata$condition <- factor(metadata$condition, levels = c("3M", "5M", "8M", "14M", "20M", "26M"))
+
+zscored_expression_preagg <- t(scale(t(expression_data_significant)))  
+
+aggregated_zscored_expression <- sapply(levels(metadata$condition), function(cond) {
+  rowMeans(zscored_expression_preagg[, metadata$condition == cond], na.rm = TRUE)
+})
+
+aggregated_zscored_expression <- as.matrix(aggregated_zscored_expression)
+
+age_levels <- c("3M", "5M", "8M", "14M", "20M", "26M")
+aggregated_zscored_expression <- aggregated_zscored_expression[, age_levels]
+
+pca_result <- prcomp(t(aggregated_zscored_expression), scale. = FALSE)
+
+explained_variance <- pca_result$sdev^2 / sum(pca_result$sdev^2)
+
+pca_stats <- data.frame(
+  PC = paste0("PC", seq_along(pca_result$sdev)),
+  Standard_Deviation = pca_result$sdev,
+  Proportion_of_Variance = explained_variance,
+  Cumulative_Proportion = cumsum(explained_variance)
+)
+
+
+#write.csv(pca_stats, "Organ_PCA_Statistics.csv", row.names = FALSE)
+
+pca_scores <- pca_result$x[, 1]  
+
+col_annotation <- HeatmapAnnotation(PCA1 = anno_points(pca_scores, gp = gpar(col = "black")))
+
+heatmap_object <- Heatmap(aggregated_zscored_expression, 
+                          name = "Z-Scored Expression",
+                          top_annotation = col_annotation,
+                          cluster_columns = FALSE,
+                          cluster_rows = TRUE,
+                          clustering_distance_rows = "euclidean",
+                          clustering_method_rows = "complete",
+                          show_row_names = FALSE,
+                          show_column_names = TRUE,
+                          column_title = "Conditions (Ages)",
+                          row_title = "Proteins",
+                          heatmap_legend_param = list(title = "Expression Level"),
+                          colorRamp2(c(-2, 0, 2), c("blue", "white", "red"))
+                        
+)
+
+
+draw(heatmap_object)
+
+```
+
+
+MFuzz
+
+```{r}
+metadata <- colData(sn_qf_custom_robust_filtered)
+ages <- metadata$condition  
+age_order <- c("3M", "5M", "8M", "14M", "20M", "26M")
+
+ages <- factor(ages, levels = age_order)
+
+imputed_data_by_age <- aggregate(t(imputed_data), by = list(ages), FUN = mean)
+
+imputed_data_by_age <- imputed_data_by_age[, -1]
+imputed_data_by_age <- t(imputed_data_by_age) 
+
+eset_age <- ExpressionSet(assayData = as.matrix(imputed_data_by_age))
+
+eset_age <- standardise(eset_age)
+
+m_age_6 <- mestimate(eset_age)
+
+set.seed(123)
+
+cl_age <- mfuzz(eset_age, c = 4, m = m_age)
+
+mfuzz.plot2(eset_age, cl = cl_age, mfrow = c(2, 2), time.labels = age_order,
+            centre = TRUE, x11 = FALSE, ylim = c(-2, 2), 
+            min.mem = 0.5)
+```
+
+
+
+Cluster number QC -> mean/SD
+```{r}
+membership_values<- cl_age$membership
+
+threshold <- 0.5
+
+cluster_stats_filtered_proteins <- data.frame(
+  Cluster = 1:ncol(membership_values),
+  Number_of_Proteins = apply(membership_values, 2, function(x) sum(x > threshold)), 
+  Mean_Membership = apply(membership_values, 2, function(x) mean(x[x > threshold])),
+  SD_Membership = apply(membership_values, 2, function(x) sd(x[x > threshold]))
+)
+
+print(cluster_stats_filtered_proteins)
+
+#write.csv(cluster_stats, "Organ_Cluster_Intra_Cohesiveness_Stats.csv", row.names = FALSE)
+
+```
+
+Cluster QC -> PC and PE
+```{r}
+membership_matrix <- cl_age_6$membership
+
+
+calculate_pc <- function(membership_matrix) {
+  n <- nrow(membership_matrix)
+  pc <- sum(membership_matrix^2) / n
+  return(pc)
+}
+
+calculate_pe <- function(membership_matrix) {
+  n <- nrow(membership_matrix)
+  pe <- -sum(membership_matrix * log(membership_matrix)) / n
+  return(pe)
+}
+
+pc_value <- calculate_pc(membership_matrix)
+pe_value <- calculate_pe(membership_matrix)
+
+cat("Partition Coefficient (PC):", pc_value, "\n")
+cat("Partition Entropy (PE):", pe_value, "\n")
+
+
+```
+
+
+
+Saving the proteins that belong to each cluster/LIST
+```{r}
+
+c_value <- 4  # Change number according to cluster number per organ
+
+membership_values <- cl_age$membership  
+cluster_information <- list()
+
+for (cluster in 1:ncol(membership_values)) {
+  selected_proteins <- rownames(membership_values)[membership_values[, cluster] > threshold]
+  
+  protein_membership <- membership_values[selected_proteins, cluster]
+  
+  expression_data <- imputed_data[selected_proteins, ]
+  
+  avg_expression <- rowMeans(expression_data, na.rm = TRUE)
+  
+  cluster_data <- data.frame(
+    Protein_ID = selected_proteins,
+    Membership_Value = protein_membership,
+    Avg_Expression = avg_expression
+  )
+  
+  cluster_information[[paste("Cluster", cluster)]] <- cluster_data
+  
+  #write.csv(cluster_data, file = paste0("Organ_Cluster_", cluster, "_proteins_c", c_value, ".csv"), row.names = FALSE)
+}
+
+cluster_information
+
+```

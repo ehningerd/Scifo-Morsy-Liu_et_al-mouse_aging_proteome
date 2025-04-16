@@ -1,0 +1,63 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(umap)
+library(readxl)
+library(ggplot2)
+```
+
+
+```{r}
+
+UMAP_Spleen_DEP <- read_excel("/UMAP_input_Organ_DEP.xlsx")
+
+data <- unique(na.omit(UMAP_Spleen_DEP[, -1]))
+data1 <- unique(na.omit(data[, -1]))
+
+custom.config <- umap.defaults
+custom.config$random_state <- 123
+custom.config$n_neighbors <- 10
+
+UMAP_Spleen_DEP.umap <- umap(as.matrix(data1[, 1:1769]), config=custom.config)
+
+res <- as.data.frame(UMAP_Spleen_DEP.umap$layout)
+res$Label = data$Label
+
+cols <- c("3M (young adult)" = "#CDC673", "5M (young adult)" = "#7DA92E", 
+          "8M (adult)" = "#8DB6CD", "14M (mid-life)" = "#CD8C95",
+          "20M (late)" = "#8B3A62", "26M (late)" = "#5A7EB3")
+
+
+p3 <- ggplot(res, aes(x = V1, y = V2, color = Label)) +
+  geom_point(size = 4) +
+  labs(title = "Spleen_DEP", x = "UMAP1", y = "UMAP2") +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 22),
+    axis.title = element_text(size = 20),
+    axis.text = element_text(size = 18),
+    legend.title = element_text(size = 18),
+    legend.text = element_text(size = 16),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black")
+  ) +
+  scale_colour_manual(
+    values = cols,
+    name = "Age group",
+    breaks = c("3M (young adult)", "5M (young adult)", "8M (adult)", 
+               "14M (mid-life)", "20M (late)", "26M (late)"),
+    labels = c("3M (young adult)", "5M (young adult)", "8M (adult)", 
+               "14M (mid-life)", "20M (late)", "26M (late)")
+  )
+
+
+ggsave("/.png", plot = p3, width = 10, height = 8, dpi = 300)
+
+p3
+
+```
+

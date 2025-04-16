@@ -1,0 +1,288 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(tibble)
+library(patchwork)
+```
+
+
+Organ pairs
+```{r}
+spleen <- read.csv("/Spleen_DEP_expression.csv")
+liver <- read.csv("/Liver_DEP_expression.csv")
+
+spleen_protein_list <- read.csv("/Spleen_pure_organ_proteins.csv")
+liver_protein_list <- read.csv("/Liver_pure_organ_proteins.csv")
+
+colnames(spleen)[1] <- "Age"
+colnames(liver)[1] <- "Age"
+
+spleen_proteins <- spleen_protein_list[[1]]
+liver_proteins <- liver_protein_list[[1]]
+
+spleen_filtered <- spleen[, c("Age", intersect(spleen_proteins, colnames(spleen)))]
+liver_filtered <- liver[, c("Age", intersect(liver_proteins, colnames(liver)))]
+
+shared_proteins <- intersect(colnames(spleen_filtered)[-1], colnames(liver_filtered)[-1])
+
+spleen_shared <- spleen_filtered[, c("Age", shared_proteins)]
+liver_shared <- liver_filtered[, c("Age", shared_proteins)]
+
+spleen_avg <- spleen_shared %>%
+  group_by(Age) %>%
+  summarise(across(everything(), mean, na.rm = TRUE))
+
+liver_avg <- liver_shared %>%
+  group_by(Age) %>%
+  summarise(across(everything(), mean, na.rm = TRUE))
+
+common_ages <- intersect(spleen_avg$Age, liver_avg$Age)
+
+spleen_avg <- spleen_avg %>%
+  filter(Age %in% common_ages) %>%
+  mutate(Age_numeric = as.numeric(sub("M", "", Age))) %>%
+  arrange(Age_numeric) %>%
+  select(-Age_numeric) 
+
+liver_avg <- liver_avg %>%
+  filter(Age %in% common_ages) %>%
+  mutate(Age_numeric = as.numeric(sub("M", "", Age))) %>%
+  arrange(Age_numeric) %>%
+  select(-Age_numeric)
+
+spleen_avg_zscore <- spleen_avg %>%
+  column_to_rownames("Age") %>%
+  scale() %>%
+  as.data.frame() %>%
+  rownames_to_column("Age")
+
+liver_avg_zscore <- liver_avg %>%
+  column_to_rownames("Age") %>%
+  scale() %>%
+  as.data.frame() %>%
+  rownames_to_column("Age")
+
+cor_results <- data.frame(Protein = shared_proteins, Correlation = NA)
+
+for (protein in shared_proteins) {
+  cor_results$Correlation[cor_results$Protein == protein] <- cor(
+    spleen_avg_zscore[[protein]],
+    liver_avg_zscore[[protein]],
+    method = "spearman"
+  )
+}
+
+high_corr_proteins <- cor_results %>%
+  filter(Correlation > 0.5) %>%
+  arrange(desc(Correlation))
+
+num_high_corr_proteins <- nrow(high_corr_proteins)
+print(paste("Number of proteins with correlation > 0.5:", num_high_corr_proteins))
+
+top_20_proteins <- high_corr_proteins %>%
+  slice(1:20) %>%
+  pull(Protein) %>%
+  toupper() 
+
+spleen_top20_data <- spleen_avg_zscore %>%
+  pivot_longer(cols = -Age, names_to = "Protein", values_to = "Z-Score") %>%
+  mutate(Protein = toupper(Protein)) %>%
+  filter(Protein %in% top_20_proteins)
+
+liver_top20_data <- liver_avg_zscore %>%
+  pivot_longer(cols = -Age, names_to = "Protein", values_to = "Z-Score") %>%
+  mutate(Protein = toupper(Protein)) %>%
+  filter(Protein %in% top_20_proteins)
+
+spleen_top20_data$Age <- factor(spleen_top20_data$Age, levels = unique(spleen_avg$Age))
+liver_top20_data$Age <- factor(liver_top20_data$Age, levels = unique(liver_avg$Age))
+
+ggplot(spleen_top20_data, aes(x = Protein, y = Age, fill = `Z-Score`)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    low = "blue", high = "red", mid = "white",
+    midpoint = 0, name = "Z-Score"
+  ) +
+  labs(
+    title = "Spleen: Heatmap of Top 20 Correlated Protein Expression (Z-Scored)",
+    x = "Top Proteins",
+    y = "Age Group"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 8),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
+  )
+
+ggplot(liver_top20_data, aes(x = Protein, y = Age, fill = `Z-Score`)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    low = "blue", high = "red", mid = "white",
+    midpoint = 0, name = "Z-Score"
+  ) +
+  labs(
+    title = "Liver: Heatmap of Top 20 Correlated Protein Expression (Z-Scored)",
+    x = "Top Proteins",
+    y = "Age Group"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 8),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
+  )
+
+```
+
+3 organs 
+```{r}
+spleen <- read.csv("/Spleen_DEP_expression.csv")
+liver <- read.csv("/Liver_DEP_expression.csv")
+kidneys <- read.csv("/Kidney_DEP_expression.csv")
+  
+spleen_protein_list <- read.csv("/Spleen_pure_organ_proteins.csv")
+liver_protein_list <- read.csv("/Liver_pure_organ_proteins.csv")
+kidney_protein_list <- read.csv("/Kidney_pure_organ_proteins.csv")
+
+colnames(spleen)[1] <- "Age"
+colnames(liver)[1] <- "Age"
+colnames(kidneys)[1] <- "Age"
+
+spleen_filtered <- spleen[, c("Age", intersect(spleen_protein_list[[1]], colnames(spleen)))]
+liver_filtered <- liver[, c("Age", intersect(liver_protein_list[[1]], colnames(liver)))]
+kidneys_filtered <- kidneys[, c("Age", intersect(kidney_protein_list[[1]], colnames(kidneys)))]
+
+shared_proteins <- Reduce(intersect, list(
+  colnames(spleen_filtered)[-1],
+  colnames(liver_filtered)[-1],
+  colnames(kidneys_filtered)[-1]
+))
+
+spleen_shared <- spleen_filtered[, c("Age", shared_proteins)]
+liver_shared <- liver_filtered[, c("Age", shared_proteins)]
+kidneys_shared <- kidneys_filtered[, c("Age", shared_proteins)]
+
+spleen_avg <- spleen_shared %>%
+  group_by(Age) %>%
+  summarise(across(everything(), mean, na.rm = TRUE))
+
+liver_avg <- liver_shared %>%
+  group_by(Age) %>%
+  summarise(across(everything(), mean, na.rm = TRUE))
+
+kidneys_avg <- kidneys_shared %>%
+  group_by(Age) %>%
+  summarise(across(everything(), mean, na.rm = TRUE))
+
+common_ages <- Reduce(intersect, list(spleen_avg$Age, liver_avg$Age, kidneys_avg$Age))
+
+spleen_avg <- spleen_avg %>%
+  filter(Age %in% common_ages) %>%
+  mutate(Age_numeric = as.numeric(sub("M", "", Age))) %>%
+  arrange(Age_numeric) %>%
+  select(-Age_numeric)
+
+liver_avg <- liver_avg %>%
+  filter(Age %in% common_ages) %>%
+  mutate(Age_numeric = as.numeric(sub("M", "", Age))) %>%
+  arrange(Age_numeric) %>%
+  select(-Age_numeric)
+
+kidneys_avg <- kidneys_avg %>%
+  filter(Age %in% common_ages) %>%
+  mutate(Age_numeric = as.numeric(sub("M", "", Age))) %>%
+  arrange(Age_numeric) %>%
+  select(-Age_numeric)
+
+spleen_avg_zscore <- spleen_avg %>%
+  column_to_rownames("Age") %>%
+  scale() %>%
+  as.data.frame() %>%
+  rownames_to_column("Age")
+
+liver_avg_zscore <- liver_avg %>%
+  column_to_rownames("Age") %>%
+  scale() %>%
+  as.data.frame() %>%
+  rownames_to_column("Age")
+
+kidneys_avg_zscore <- kidneys_avg %>%
+  column_to_rownames("Age") %>%
+  scale() %>%
+  as.data.frame() %>%
+  rownames_to_column("Age")
+
+pairwise_corr <- data.frame(Protein = shared_proteins, 
+                            Kidney_Liver = NA, 
+                            Liver_Spleen = NA, 
+                            Kidney_Spleen = NA)
+
+for (protein in shared_proteins) {
+  pairwise_corr$Kidney_Liver[pairwise_corr$Protein == protein] <- cor(
+    kidneys_avg_zscore[[protein]],
+    liver_avg_zscore[[protein]],
+    method = "spearman"
+  )
+  pairwise_corr$Liver_Spleen[pairwise_corr$Protein == protein] <- cor(
+    liver_avg_zscore[[protein]],
+    spleen_avg_zscore[[protein]],
+    method = "spearman"
+  )
+  pairwise_corr$Kidney_Spleen[pairwise_corr$Protein == protein] <- cor(
+    kidneys_avg_zscore[[protein]],
+    spleen_avg_zscore[[protein]],
+    method = "spearman"
+  )
+}
+
+# write.csv(pairwise_corr, "Spearman's_correlation_three_organs.csv", row.names = FALSE)
+
+high_corr_proteins <- pairwise_corr %>%
+  filter(Kidney_Liver > 0.5 & Liver_Spleen > 0.5 & Kidney_Spleen > 0.5) %>%
+  mutate(Protein = toupper(Protein))
+
+combined_data <- bind_rows(
+  spleen_avg_zscore %>% mutate(Organ = "Spleen"),
+  liver_avg_zscore %>% mutate(Organ = "Liver"),
+  kidneys_avg_zscore %>% mutate(Organ = "Kidney")
+) %>%
+  pivot_longer(cols = -c(Age, Organ), names_to = "Protein", values_to = "Z-Score") %>%
+  mutate(Protein = toupper(Protein)) %>%
+  filter(Protein %in% high_corr_proteins$Protein)
+
+combined_data$Age <- factor(combined_data$Age, levels = c("3M", "5M", "8M", "14M", "20M", "26M"))
+
+heatmap_plot <- ggplot(combined_data, aes(x = Age, y = Protein, fill = `Z-Score`)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    low = "blue", high = "red", mid = "white",
+    midpoint = 0, name = "Z-Score"
+  ) +
+  facet_wrap(~ Organ, ncol = 3) +  # Keeps separate panels for each organ
+  labs(
+    title = "Heatmap of Highly Correlated Proteins (Z-Scored)",
+    x = "Age Group",
+    y = "Proteins"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 10),
+    axis.text.y = element_text(size = 6),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+  )
+
+
+print(heatmap_plot)
+
+```
+
+
+

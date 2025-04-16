@@ -1,0 +1,136 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(QFeatures)
+library(SummarizedExperiment)
+library(lme4)
+library(dplyr)
+library(tidyr)
+library(tibble)
+```
+
+Combining All Organ Qfeatures Object
+```{r}
+
+load_qf_object <- function(file_path) {
+  env <- new.env()
+  load(file_path, envir = env)
+  obj_name <- ls(env)[1]
+  get(obj_name, envir = env)
+}
+
+extract_long_df <- function(qf, tissue_name) {
+  expr_matrix <- assay(qf, "MissForest_imputed_proteinRobust_all_proteins")
+  meta <- as.data.frame(colData(qf))
+  
+  long_df <- as.data.frame(expr_matrix) %>%
+    rownames_to_column("Protein") %>%
+    pivot_longer(-Protein, names_to = "Sample", values_to = "Expression") %>%
+    left_join(meta %>% rownames_to_column("Sample"), by = "Sample")
+  
+  long_df$Tissue <- tissue_name
+  long_df$Mouse <- long_df$sample
+  long_df$Age <- as.numeric(gsub("M.*", "", long_df$condition))
+  
+  return(long_df[, c("Protein", "Sample", "Mouse", "Age", "Tissue", "Expression")])
+}
+
+files_and_tissues <- list(
+  Kidney = "Kidneys_Qfeatures.RData",
+  Spleen = "Spleen_Qfeatures.RData",
+  Liver = "Liver_Qfeatures.RData",
+  Lung = "Lung_Qfeatures.RData",
+  SkeletalMuscle = "SM_Qfeatures.RData",
+  Testis = "Testis_Qfeatures.RData",
+  Heart = "Heart_Qfeatures.RData"
+)
+
+all_dfs <- lapply(names(files_and_tissues), function(tissue) {
+  file_path <- files_and_tissues[[tissue]]
+  qf <- load_qf_object(file_path)
+  extract_long_df(qf, tissue)
+})
+
+combined_df <- bind_rows(all_dfs)
+
+head(combined_df)
+```
+
+
+LMM
+```{r}
+lrt_results <- list()
+
+unique_proteins <- unique(combined_df$Protein)
+
+for (protein in unique_proteins) {
+  df_prot <- combined_df %>% filter(Protein == protein)
+  
+  if (length(unique(df_prot$Tissue)) >= 2) {
+    tryCatch({
+      full_model <- lmer(Expression ~ Age * Tissue + (1 | Mouse), data = df_prot, REML = FALSE)
+      reduced_model <- lmer(Expression ~ Age + Tissue + (1 | Mouse), data = df_prot, REML = FALSE)
+      lrt <- anova(reduced_model, full_model)
+      p_val <- lrt$`Pr(>Chisq)`[2]
+      lrt_results[[protein]] <- data.frame(Protein = protein, P.Value = p_val)
+    }, error = function(e) {
+      lrt_results[[protein]] <- data.frame(Protein = protein, P.Value = NA)
+    })
+  }
+}
+
+lrt_df <- do.call(rbind, lrt_results)
+lrt_df$adj.P.Val <- p.adjust(lrt_df$P.Value, method = "BH")
+
+head(lrt_df)
+sum(lrt_df$adj.P.Val < 0.05, na.rm = TRUE)
+
+write.csv(lrt_df[lrt_df$adj.P.Val < 0.05, ], "Significant_Tissue_Specific_Age_Interaction.csv", row.names = FALSE)
+
+```
+
+
+Directionality_Linear_Trend_Test/Organ
+```{r}
+sig_prots <- read.csv("Significant_Tissue_Specific_Age_Interaction.csv")$Protein
+
+tissues <- names(files_and_tissues)
+trend_matrix <- matrix("", nrow = length(sig_prots), ncol = length(tissues),
+                       dimnames = list(sig_prots, tissues))
+
+for (tissue in tissues) {
+  file_path <- files_and_tissues[[tissue]]
+  qf <- load_qf_object(file_path)
+  
+  expr_matrix <- assay(qf, "MissForest_imputed_proteinRobust_all_proteins")
+  sample_meta <- as.data.frame(colData(qf))
+  sample_meta$Age <- as.numeric(gsub("M.*", "", sample_meta$condition))
+  
+  for (prot in sig_prots) {
+    if (prot %in% rownames(expr_matrix)) {
+      y <- as.numeric(expr_matrix[prot, ])
+      model <- tryCatch({
+        lm(y ~ Age, data = sample_meta)
+      }, error = function(e) NULL)
+      
+      if (!is.null(model)) {
+        coef_info <- summary(model)$coefficients
+        p <- coef_info["Age", "Pr(>|t|)"]
+        slope <- coef_info["Age", "Estimate"]
+        adj_p <- p.adjust(p, method = "BH")
+        
+        if (!is.na(adj_p) && adj_p < 0.05) {
+          trend_matrix[prot, tissue] <- ifelse(slope > 0, "Up", "Down")
+        }
+      }
+    }
+  }
+}
+
+
+write.csv(trend_matrix, "Significant_Proteins_LinearTrend_Directionality_Matrix.csv", quote = FALSE)
+
+```

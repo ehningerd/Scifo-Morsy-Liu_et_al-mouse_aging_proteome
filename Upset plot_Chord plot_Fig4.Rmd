@@ -1,0 +1,153 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(UpSetR)
+library(dplyr)
+library(gtools)
+library(circlize)
+```
+
+Upset plot for the shared proteins
+
+```{r}
+
+organ_files <- c(
+  Kidneys = "/Kidney_DEPs_non_blood.csv",
+  Spleen = "/Spleen__DEPs_non_blood.csv",
+  Liver = "/Liver_DEPs_non_blood.csv",
+  Lungs = "/Lungs_DEPs_non_blood.csv",
+  Testis = "/Testis_DEPs_non_bloods.csv",
+  Brain = "/Brain_DEPs_non_blood.csv",
+  Heart = "/Heart_DEPs_non_blood.csv",
+  SM = "/SM_DEPs_non_blood.csv"
+)
+
+organ_proteins <- list()
+# Step 5: Read CSV files and extract protein names
+for (organ in names(organ_files)) {
+  filename <- organ_files[[organ]]
+  
+  if (file.exists(filename)) {
+    data <- read.csv(filename, stringsAsFactors = FALSE)
+    
+    proteins <- data$Protein 
+    
+    proteins <- unique(na.omit(proteins))
+    organ_proteins[[organ]] <- proteins
+  } else {
+    warning(paste("File not found:", filename))
+  }
+}
+
+
+upset_data <- fromList(organ_proteins)
+
+upset(upset_data, 
+      nsets = length(organ_proteins), 
+      nintersects = NA, 
+      order.by = "freq",
+      empty.intersections = NULL,
+      point.size = 3, 
+      line.size = 1,
+      mainbar.y.label = "Intersection Size",
+      sets.x.label = "Proteins per Organ")
+
+```
+
+Saving shared proteins matrix
+```{r}
+shared_proteins_list <- lapply(organ_proteins, function(proteins) {
+  unique(proteins)
+})
+
+organs <- names(shared_proteins_list)
+
+shared_proteins_by_combination <- list()
+
+for (k in 2:length(organs)) {
+  organ_combinations <- combinations(n = length(organs), r = k, v = organs)
+  
+  for (i in 1:nrow(organ_combinations)) {
+    current_organs <- organ_combinations[i, ]
+    
+    shared_proteins <- Reduce(intersect, shared_proteins_list[current_organs])
+    
+    shared_proteins_by_combination[[paste(current_organs, collapse = ", ")]] <- shared_proteins
+  }
+}
+
+result_df <- data.frame(
+  Organ_Combination = names(shared_proteins_by_combination),
+  Shared_Proteins = sapply(shared_proteins_by_combination, function(x) paste(x, collapse = ", "))
+)
+
+
+#write.csv(result_df, "shared_proteins_organ_combinations.csv", row.names = FALSE)
+
+print(head(result_df))
+```
+
+
+Chord plot
+```{r}
+
+organ_files <- c(
+  Kidneys = "/Kidney_DEPs_non_blood.csv",
+  Spleen = "/Spleen__DEPs_non_blood.csv",
+  Liver = "/Liver_DEPs_non_blood.csv",
+  Lungs = "/Lungs_DEPs_non_blood.csv",
+  Testis = "/Testis_DEPs_non_bloods.csv",
+  Brain = "/Brain_DEPs_non_blood.csv",
+  Heart = "/Heart_DEPs_non_blood.csv",
+  SM = "/SM_DEPs_non_blood.csv"
+)
+
+organ_proteins <- list()
+
+for (organ in names(organ_files)) {
+  filename <- organ_files[[organ]]
+  
+  if (file.exists(filename)) {
+    data <- read.csv(filename, stringsAsFactors = FALSE)
+  
+    proteins <- unique(na.omit(data[[1]]))  
+    
+    organ_proteins[[organ]] <- proteins
+  } else {
+    warning(paste("File not found:", filename))
+  }
+}
+
+organ_names <- names(organ_proteins)
+shared_matrix <- matrix(0, nrow = length(organ_names), ncol = length(organ_names),
+                        dimnames = list(organ_names, organ_names))
+
+for (i in 1:length(organ_names)) {
+  for (j in 1:length(organ_names)) {
+    shared_matrix[i, j] <- length(intersect(organ_proteins[[i]], organ_proteins[[j]]))
+  }
+}
+
+print(shared_matrix)
+
+chordDiagram(shared_matrix, 
+             annotationTrack = "grid", 
+             preAllocateTracks = list(track.height = 0.1), 
+             transparency = 0.5)  
+
+circos.trackPlotRegion(track.index = 1, panel.fun = function(x, y) {
+  sector.name = get.cell.meta.data("sector.index")
+  circos.text(CELL_META$xcenter, CELL_META$ylim[1], sector.name, facing = "clockwise", 
+              niceFacing = TRUE, adj = c(0, 0.5), cex = 0.5)  
+}, bg.border = NA)
+
+circos.clear()
+
+
+```
+
+
